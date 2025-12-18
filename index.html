@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>赛博霓虹手套</title>
+    <title>手机端手势识别修复版</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -14,234 +14,165 @@
             margin: 0;
             background-color: #000;
             overflow: hidden;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            /* 禁止手机端长按选中文字等干扰操作 */
-            user-select: none;
-            -webkit-user-select: none;
             touch-action: none;
+            font-family: monospace;
         }
 
+        /* 全屏画布 */
         canvas {
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
-            transform: scaleX(-1); /* 镜像 */
+            transform: scaleX(-1); /* 镜像翻转，像照镜子一样 */
             z-index: 2;
         }
 
-        .input_video { display: none; }
-
-        #error-msg {
+        /* 调试用：左上角显示原始摄像头画面 */
+        .input_video {
             position: absolute;
-            top: 20%;
-            width: 80%;
-            text-align: center;
-            color: #ff4444;
-            font-family: sans-serif;
-            background: rgba(0,0,0,0.8);
-            padding: 20px;
-            border-radius: 10px;
-            display: none;
-            z-index: 100;
+            top: 10px;
+            left: 10px;
+            width: 120px; /* 小窗口 */
+            height: auto;
+            z-index: 10;
+            border: 2px solid red; /* 红框表示正在运行 */
+            opacity: 0.6;
+            transform: scaleX(-1);
+        }
+
+        /* 屏幕日志打印区 */
+        #logs {
+            position: absolute;
+            bottom: 20px;
+            left: 10px;
+            right: 10px;
+            color: #0f0; /* 绿色文字 */
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            pointer-events: none;
+            z-index: 20;
+            font-size: 14px;
+            white-space: pre-wrap;
+            border-radius: 8px;
         }
     </style>
 </head>
 <body>
 
-    <div id="error-msg"></div>
-    <video class="input_video" playsinline></video>
+    <!-- 原始视频流 (调试用) -->
+    <video class="input_video" playsinline muted autoplay></video>
+    
+    <!-- 绘制层 -->
     <canvas class="output_canvas"></canvas>
+
+    <!-- 日志显示 -->
+    <div id="logs">系统初始化中...</div>
 
     <script type="module">
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementsByClassName('output_canvas')[0];
         const ctx = canvasElement.getContext('2d');
-        const errorMsg = document.getElementById('error-msg');
+        const logBox = document.getElementById('logs');
+
+        // 日志打印函数
+        function log(text) {
+            const time = new Date().toLocaleTimeString();
+            logBox.innerText = `[${time}] ${text}\n` + logBox.innerText.slice(0, 200);
+        }
 
         function resize() {
-            // 针对手机高分屏优化清晰度
             const dpr = window.devicePixelRatio || 1;
             canvasElement.width = window.innerWidth * dpr;
             canvasElement.height = window.innerHeight * dpr;
             ctx.scale(dpr, dpr);
-            canvasElement.style.width = window.innerWidth + 'px';
-            canvasElement.style.height = window.innerHeight + 'px';
         }
         window.addEventListener('resize', resize);
         resize();
 
-        // --- 矢量数学工具函数 ---
-        // 用于计算手指边缘坐标
-        function getOffsetPoints(p1, p2, width) {
-            const dx = p2.x - p1.x;
-            const dy = p2.y - p1.y;
-            const len = Math.sqrt(dx*dx + dy*dy) || 1; // 防止除以0
-            
-            // 计算单位法向量 (垂直于骨骼方向)
-            const nx = -dy / len;
-            const ny = dx / len;
-
-            // 向两侧偏移
-            return {
-                left: { x: p1.x + nx * width, y: p1.y + ny * width },
-                right: { x: p1.x - nx * width, y: p1.y - ny * width },
-                nextLeft: { x: p2.x + nx * width, y: p2.y + ny * width },
-                nextRight: { x: p2.x - nx * width, y: p2.y - ny * width }
-            };
-        }
-
-        // --- 核心绘制逻辑：生成手套轮廓 ---
-        function drawPerfectOutline(landmarks) {
-            const w = canvasElement.width / (window.devicePixelRatio || 1);
-            const h = canvasElement.height / (window.devicePixelRatio || 1);
-            
-            // 将归一化坐标(0-1)转换为像素坐标
-            const pts = landmarks.map(lm => ({x: lm.x * w, y: lm.y * h}));
-
-            // 定义手指粗细 (根据手的大小动态调整)
-            // 计算手腕(0)到中指根(9)的距离作为参考
+        // --- 平滑轮廓算法 (保持不变) ---
+        function getSmoothContour(landmarks, width, height) {
+            const contourPoints = [];
+            const fingers = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
+            const pts = landmarks.map(l => ({x: l.x * width, y: l.y * height}));
             const handSize = Math.hypot(pts[0].x - pts[9].x, pts[0].y - pts[9].y);
-            const thickness = handSize * 0.12; // 手指半径系数，调大变胖，调小变瘦
+            const offset = handSize * 0.12; 
 
-            ctx.beginPath();
+            const addPoint = (p1, p2, dist, side) => {
+                const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                const normal = angle + (side * Math.PI / 2); 
+                return { x: p1.x + Math.cos(normal) * dist, y: p1.y + Math.sin(normal) * dist };
+            };
 
-            // 我们需要构建一条连续的路径围绕整个手
-            // 顺序：手腕 -> 拇指外 -> 拇指尖 -> 拇指内 -> 食指外...
-            
-            // 1. 手腕左侧 (大致位置)
-            // 利用手腕(0)和食指根(5)的方向反推
-            const wristOffset = getOffsetPoints(pts[0], pts[5], thickness * 1.2);
-            ctx.moveTo(wristOffset.right.x, wristOffset.right.y); // 起点：手腕小拇指侧
+            contourPoints.push(addPoint(pts[0], pts[5], offset * 1.5, -1));
 
-            // 定义五根手指的路径顺序 (根部 -> 关节 -> 关节 -> 指尖)
-            const fingers = [
-                [1, 2, 3, 4],       // 拇指
-                [5, 6, 7, 8],       // 食指
-                [9, 10, 11, 12],    // 中指
-                [13, 14, 15, 16],   // 无名指
-                [17, 18, 19, 20]    // 小指
-            ];
-
-            // 2. 遍历每一根手指
             for (let i = 0; i < fingers.length; i++) {
-                const fingerIndices = fingers[i];
+                const indices = fingers[i];
+                for (let j = 0; j < indices.length - 1; j++) contourPoints.push(addPoint(pts[indices[j]], pts[indices[j+1]], offset, 1));
                 
-                // --- 上行：绘制手指左侧/外侧 ---
-                for (let j = 0; j < fingerIndices.length - 1; j++) {
-                    const pCurrent = pts[fingerIndices[j]];
-                    const pNext = pts[fingerIndices[j+1]];
-                    
-                    // 指尖稍微细一点，根部粗一点
-                    let currentThick = thickness;
-                    if (j === fingerIndices.length - 2) currentThick *= 0.8; 
+                const tipIdx = indices[indices.length - 1];
+                const prevIdx = indices[indices.length - 2];
+                const angle = Math.atan2(pts[tipIdx].y - pts[prevIdx].y, pts[tipIdx].x - pts[prevIdx].x);
+                contourPoints.push({ x: pts[tipIdx].x + Math.cos(angle)*(offset*1.2), y: pts[tipIdx].y + Math.sin(angle)*(offset*1.2) });
 
-                    const offsets = getOffsetPoints(pCurrent, pNext, currentThick);
-                    
-                    // 只有拇指(i=0)的第一段需要特殊处理MoveTo，其他都是LineTo
-                    // 这里我们采用简化方案，直接连线到每个关节的"左侧"偏移点
-                    // 注意：这里的"左"是相对手指指向的
-                    // 对于左手/右手，拇指是特殊的，但我们在镜像模式下统一处理
-                    
-                    if (i === 0 && j === 0) {
-                         // 拇指根部特殊连接
-                         ctx.quadraticCurveTo(pts[1].x, pts[1].y, offsets.left.x, offsets.left.y);
-                    } else {
-                        ctx.lineTo(offsets.left.x, offsets.left.y);
-                    }
-                    ctx.lineTo(offsets.nextLeft.x, offsets.nextLeft.y);
-                }
-
-                // --- 指尖圆弧 ---
-                const tipIdx = fingerIndices[fingerIndices.length - 1];
-                const tipPrevIdx = fingerIndices[fingerIndices.length - 2];
-                const tipPt = pts[tipIdx];
-                const tipPrevPt = pts[tipPrevIdx];
-                const tipOffsets = getOffsetPoints(tipPrevPt, tipPt, thickness * 0.8);
+                for (let j = indices.length - 2; j >= 0; j--) contourPoints.push(addPoint(pts[indices[j]], pts[indices[j+1]], offset, -1));
                 
-                // 画一个半圆包住指尖
-                // 控制点设在指尖延伸出去一点的地方
-                const dx = tipPt.x - tipPrevPt.x;
-                const dy = tipPt.y - tipPrevPt.y;
-                const len = Math.hypot(dx, dy);
-                const extendX = tipPt.x + (dx/len) * thickness;
-                const extendY = tipPt.y + (dy/len) * thickness;
-
-                ctx.bezierCurveTo(
-                    tipOffsets.nextLeft.x, tipOffsets.nextLeft.y,
-                    extendX, extendY,
-                    tipOffsets.nextRight.x, tipOffsets.nextRight.y
-                );
-
-                // --- 下行：绘制手指右侧/内侧 ---
-                for (let j = fingerIndices.length - 2; j >= 0; j--) {
-                    const pCurrent = pts[fingerIndices[j]];
-                    const pNext = pts[fingerIndices[j+1]];
-                    let currentThick = thickness;
-                    if (j === fingerIndices.length - 2) currentThick *= 0.8;
-
-                    const offsets = getOffsetPoints(pCurrent, pNext, currentThick);
-                    ctx.lineTo(offsets.right.x, offsets.right.y);
-                }
-
-                // --- 指缝连接 (Valley) ---
                 if (i < fingers.length - 1) {
-                    // 如果不是最后一根手指，连接到下一根手指的根部
-                    // 当前手指根部
-                    const currentRoot = pts[fingerIndices[0]]; 
-                    // 下一根手指根部
+                    const currRoot = pts[indices[0]];
                     const nextRoot = pts[fingers[i+1][0]];
-                    
-                    // 谷底点（两指根部的中点，稍微向手心内收一点）
-                    const midX = (currentRoot.x + nextRoot.x) / 2;
-                    const midY = (currentRoot.y + nextRoot.y) / 2;
-                    
-                    // 简单的贝塞尔曲线连接指缝
-                    ctx.quadraticCurveTo(midX, midY, midX, midY); 
+                    contourPoints.push({ x: (currRoot.x + nextRoot.x)/2, y: (currRoot.y + nextRoot.y)/2 });
                 }
             }
+            contourPoints.push(addPoint(pts[0], pts[17], offset * 1.5, 1));
+            return contourPoints;
+        }
 
-            // 3. 封口：连接小指外侧回手腕
-            const pinkyRoot = pts[17];
-            const wrist = pts[0];
-            const wristOffsets = getOffsetPoints(wrist, pinkyRoot, thickness * 1.2);
-            
-            ctx.lineTo(wristOffsets.nextRight.x, wristOffsets.nextRight.y);
-            ctx.quadraticCurveTo(wristOffsets.right.x, wristOffsets.right.y, wristOffsets.right.x, wristOffsets.right.y);
-            
-            // 闭合路径
+        function drawSmoothPath(ctx, points) {
+            if (points.length < 2) return;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length - 1; i++) {
+                const midX = (points[i].x + points[i+1].x) / 2;
+                const midY = (points[i].y + points[i+1].y) / 2;
+                ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+            }
+            ctx.lineTo(points[points.length-1].x, points[points.length-1].y);
+            ctx.quadraticCurveTo(points[points.length-1].x, points[points.length-1].y, points[0].x, points[0].y);
             ctx.closePath();
-
-            // --- 4. 渲染发光风格 ---
-            ctx.lineCap = "round";
-            ctx.lineJoin = "round";
-
-            // 第一层：外部强光晕
-            ctx.shadowColor = "#FFFFFF"; // 发光颜色
-            ctx.shadowBlur = 30;
+            
+            ctx.shadowColor = "#FFFFFF";
+            ctx.shadowBlur = 20;
             ctx.strokeStyle = "#FFFFFF";
             ctx.lineWidth = 4;
+            ctx.lineJoin = "round";
+            ctx.lineCap = "round";
             ctx.stroke();
-
-            // 第二层：核心高亮 (让线条中心更亮)
+            
             ctx.shadowBlur = 0;
             ctx.lineWidth = 2;
-            ctx.strokeStyle = "#FFFFFF"; 
             ctx.stroke();
         }
+
+        // --- 核心逻辑 ---
 
         function onResults(results) {
             // 清空画布
-            ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            const dpr = window.devicePixelRatio || 1;
+            ctx.clearRect(0, 0, canvasElement.width / dpr, canvasElement.height / dpr);
 
-            if (results.multiHandLandmarks) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                log("检测到手部! 正在绘制...");
                 for (const landmarks of results.multiHandLandmarks) {
-                    drawPerfectOutline(landmarks);
+                    const w = canvasElement.width / dpr;
+                    const h = canvasElement.height / dpr;
+                    const rawPoints = getSmoothContour(landmarks, w, h);
+                    drawSmoothPath(ctx, rawPoints);
                 }
+            } else {
+                log("画面正常 - 未检测到手 (请举手)");
             }
         }
+
+        log("正在加载 MediaPipe 模型...");
 
         const hands = new Hands({locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
@@ -249,35 +180,37 @@
 
         hands.setOptions({
             maxNumHands: 2,
-            modelComplexity: 1,
+            modelComplexity: 0, // 手机端改为0 (Lite模型)，速度更快
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
         });
 
         hands.onResults(onResults);
 
+        // 使用自定义的 Camera 初始化，不锁定分辨率
         const camera = new Camera(videoElement, {
             onFrame: async () => {
                 await hands.send({image: videoElement});
             },
-            width: 1280,
-            height: 720
+            facingMode: "user", // 强制使用前置摄像头
+            width: 640,         // 降低分辨率以兼容更多低端机型
+            height: 480
         });
 
-        camera.start().catch(err => {
-            console.error(err);
-            errorMsg.style.display = 'block';
-            errorMsg.innerHTML = `
-                <h3>无法启动摄像头</h3>
-                <p>错误代码: ${err.name}</p>
-                <p><strong>解决方案：</strong></p>
-                <ul style="text-align:left; display:inline-block;">
-                    <li>请确保你使用的是 <strong>HTTPS</strong> 协议访问网页。</li>
-                    <li>如果是本地开发，请使用 localhost (不要用 IP)。</li>
-                    <li>iOS/Android 必须使用 HTTPS。</li>
-                </ul>
-            `;
-        });
+        log("正在请求摄像头权限...");
+
+        camera.start()
+            .then(() => {
+                log("摄像头启动成功！等待画面...");
+                // 强制播放视频，解决部分iOS不自动播放问题
+                videoElement.play();
+            })
+            .catch(err => {
+                console.error(err);
+                log("错误: " + err.message);
+                log("请检查是否在 HTTPS 环境，且已允许权限");
+            });
+
     </script>
 </body>
 </html>
