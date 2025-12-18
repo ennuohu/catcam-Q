@@ -1,0 +1,195 @@
+/* 全局重置 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    overflow: hidden;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: white;
+    width: 100vw;
+    height: 100vh;
+}
+
+/* 加载动画 */
+#loading {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(26, 26, 46, 0.95);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+    backdrop-filter: blur(10px);
+}
+
+#loading.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+}
+
+.spinner {
+    width: 60px;
+    height: 60px;
+    border: 4px solid rgba(255, 255, 255, 0.1);
+    border-top: 4px solid #ff6b6b;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+#loading p {
+    margin-top: 20px;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+#loading .hint {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 10px;
+}
+
+/* 主应用容器 */
+#app {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: none;
+}
+
+#app.active {
+    display: block;
+}
+
+/* 视频元素（隐藏但保持运行） */
+#webcam {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* MediaPipe可视化Canvas（可选显示） */
+#output-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0; /* 设为0.3可显示手势检测框用于调试 */
+    z-index: 1;
+}
+
+/* Three.js 3D场景容器 */
+#scene-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2;
+}
+
+/* 状态指示器 */
+#status {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.7);
+    padding: 12px 20px;
+    border-radius: 25px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 100;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ff6b6b;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.status-dot.active {
+    background: #51cf66;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+#status-text {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+/* 移动端优化 */
+@media (max-width: 768px) {
+    #status {
+        top: 10px;
+        padding: 10px 16px;
+        font-size: 12px;
+    }
+    
+    .status-dot {
+        width: 10px;
+        height: 10px;
+    }
+}
+
+/* 禁用移动端的下拉刷新和缩放 */
+body {
+    overscroll-behavior: none;
+    touch-action: none;
+}
+
+/* 全屏按钮样式（可选） */
+.fullscreen-btn {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 50px;
+    height: 50px;
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    transition: background 0.3s ease;
+}
+
+.fullscreen-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.fullscreen-btn svg {
+    width: 24px;
+    height: 24px;
+    fill: white;
+}

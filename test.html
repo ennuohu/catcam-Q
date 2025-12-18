@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>库加载测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #1a1a2e;
+            color: white;
+        }
+
+        .test-item {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .success {
+            background: #28a745;
+        }
+
+        .error {
+            background: #dc3545;
+        }
+
+        .loading {
+            background: #ffc107;
+            color: black;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>库加载测试</h1>
+    <div id="results"></div>
+
+    <!-- 加载Three.js -->
+    <script src="https://unpkg.com/three@0.160.0/build/three.js"></script>
+    <script src="https://unpkg.com/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+
+    <!-- MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+    <script>
+        const results = document.getElementById('results');
+
+        function addResult(name, success, message) {
+            const div = document.createElement('div');
+            div.className = 'test-item ' + (success ? 'success' : 'error');
+            div.innerHTML = `<strong>${name}</strong>: ${message}`;
+            results.appendChild(div);
+        }
+
+        // 测试THREE
+        if (typeof THREE !== 'undefined') {
+            addResult('Three.js', true, `✅ 加载成功 (版本: ${THREE.REVISION})`);
+        } else {
+            addResult('Three.js', false, '❌ 未加载');
+        }
+
+        // 测试GLTFLoader
+        if (typeof THREE !== 'undefined' && THREE.GLTFLoader) {
+            addResult('GLTFLoader', true, '✅ 加载成功');
+        } else {
+            addResult('GLTFLoader', false, '❌ 未加载');
+        }
+
+        // 测试MediaPipe Hands
+        if (typeof Hands !== 'undefined') {
+            addResult('MediaPipe Hands', true, '✅ 加载成功');
+        } else {
+            addResult('MediaPipe Hands', false, '❌ 未加载');
+        }
+
+        // 测试Camera
+        if (typeof Camera !== 'undefined') {
+            addResult('MediaPipe Camera', true, '✅ 加载成功');
+        } else {
+            addResult('MediaPipe Camera', false, '❌ 未加载');
+        }
+
+        // 测试绘图工具
+        if (typeof drawConnectors !== 'undefined') {
+            addResult('Drawing Utils', true, '✅ 加载成功');
+        } else {
+            addResult('Drawing Utils', false, '❌ 未加载');
+        }
+
+        // 测试摄像头访问
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            addResult('摄像头API', true, '✅ 浏览器支持');
+        } else {
+            addResult('摄像头API', false, '❌ 浏览器不支持');
+        }
+
+        console.log('测试完成');
+        console.log('THREE:', THREE);
+    </script>
+</body>
+
+</html>

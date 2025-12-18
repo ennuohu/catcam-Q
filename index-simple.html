@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>猫咪手势跟踪 - CatCam (简化版)</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <!-- 加载提示 -->
+    <div id="loading">
+        <div class="spinner"></div>
+        <p>正在初始化...</p>
+        <p class="hint">暂不需要摄像头权限</p>
+    </div>
+
+    <!-- 主容器 -->
+    <div id="app">
+        <!-- Three.js 3D场景容器 -->
+        <div id="scene-container"></div>
+
+        <!-- 状态指示器 -->
+        <div id="status">
+            <div class="status-dot active"></div>
+            <span id="status-text">移动鼠标控制猫咪</span>
+        </div>
+    </div>
+
+    <!-- 引入依赖库 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.js"></script>
+
+    <script>
+        // 全局变量
+        let camera, scene, renderer, catModel;
+        let mouseX = 0, mouseY = 0;
+        let targetRotation = { x: 0, y: 0 };
+        let currentRotation = { x: 0, y: 0 };
+
+        // 初始化
+        async function init() {
+            console.log('🚀 初始化应用...');
+
+            // 检查THREE
+            if (typeof THREE === 'undefined') {
+                alert('Three.js加载失败，请刷新页面');
+                return;
+            }
+            console.log('✅ THREE.js已加载，版本:', THREE.REVISION);
+
+            // 初始化Three.js场景
+            initThreeJS();
+
+            // 开始渲染循环
+            animate();
+
+            // 隐藏加载界面
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('app').classList.add('active');
+
+            console.log('✅ 应用初始化完成');
+        }
+
+        // Three.js场景初始化
+        function initThreeJS() {
+            console.log('🎨 初始化Three.js场景...');
+
+            const container = document.getElementById('scene-container');
+
+            // 创建场景
+            scene = new THREE.Scene();
+            scene.background = null;
+
+            // 创建相机
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 8;
+
+            // 创建渲染器
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // 添加光照
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 5, 5);
+            scene.add(directionalLight);
+
+            const pointLight = new THREE.PointLight(0xff9999, 0.5);
+            pointLight.position.set(-5, 3, 3);
+            scene.add(pointLight);
+
+            // 创建猫咪模型
+            createCatModel();
+
+            // 鼠标/触摸事件
+            document.addEventListener('mousemove', onPointerMove, false);
+            document.addEventListener('touchmove', onTouchMove, false);
+
+            // 窗口调整
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        // 创建猫咪模型
+        function createCatModel() {
+            console.log('🐱 创建3D猫咪模型...');
+
+            catModel = new THREE.Group();
+
+            const furMaterial = new THREE.MeshPhongMaterial({ color: 0xff9966, shininess: 30 });
+            const noseMaterial = new THREE.MeshPhongMaterial({ color: 0xff6b9d, shininess: 50 });
+            const eyeWhiteMaterial = new THREE.MeshPhongMaterial({ color: 0xffffff });
+            const pupilMaterial = new THREE.MeshPhongMaterial({ color: 0x1a1a1a });
+
+            // 头部
+            const head = new THREE.Mesh(new THREE.SphereGeometry(1.2, 32, 32), furMaterial);
+            head.scale.set(1, 0.95, 0.9);
+            catModel.add(head);
+
+            // 左耳
+            const leftEar = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 8), furMaterial);
+            leftEar.position.set(-0.7, 1.0, 0.1);
+            leftEar.rotation.z = -0.3;
+            catModel.add(leftEar);
+
+            // 右耳
+            const rightEar = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 8), furMaterial);
+            rightEar.position.set(0.7, 1.0, 0.1);
+            rightEar.rotation.z = 0.3;
+            catModel.add(rightEar);
+
+            // 左眼组
+            const leftEyeGroup = new THREE.Group();
+            leftEyeGroup.add(new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), eyeWhiteMaterial));
+            const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), pupilMaterial);
+            leftPupil.position.z = 0.18;
+            leftEyeGroup.add(leftPupil);
+            leftEyeGroup.position.set(-0.5, 0.3, 0.8);
+            leftEyeGroup.name = 'leftEye';
+            catModel.add(leftEyeGroup);
+
+            // 右眼组
+            const rightEyeGroup = new THREE.Group();
+            rightEyeGroup.add(new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), eyeWhiteMaterial));
+            const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), pupilMaterial);
+            rightPupil.position.z = 0.18;
+            rightEyeGroup.add(rightPupil);
+            rightEyeGroup.position.set(0.5, 0.3, 0.8);
+            rightEyeGroup.name = 'rightEye';
+            catModel.add(rightEyeGroup);
+
+            // 鼻子
+            const nose = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), noseMaterial);
+            nose.position.set(0, -0.1, 1.1);
+            nose.scale.set(0.7, 0.6, 0.5);
+            catModel.add(nose);
+
+            // 胡须
+            const whiskerMaterial = new THREE.LineBasicMaterial({ color: 0x333333 });
+            [
+                [new THREE.Vector3(-0.3, -0.2, 1.0), new THREE.Vector3(-1.5, -0.1, 1.0)],
+                [new THREE.Vector3(-0.3, -0.3, 1.0), new THREE.Vector3(-1.5, -0.3, 1.0)],
+                [new THREE.Vector3(0.3, -0.2, 1.0), new THREE.Vector3(1.5, -0.1, 1.0)],
+                [new THREE.Vector3(0.3, -0.3, 1.0), new THREE.Vector3(1.5, -0.3, 1.0)]
+            ].forEach(points => {
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                catModel.add(new THREE.Line(geometry, whiskerMaterial));
+            });
+
+            // 身体
+            const body = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), furMaterial);
+            body.position.set(0, -2, 0);
+            body.scale.set(1.1, 1.3, 0.9);
+            catModel.add(body);
+
+            catModel.position.y = 0.5;
+            scene.add(catModel);
+
+            console.log('✅ 猫咪模型创建完成');
+        }
+
+        // 鼠标移动
+        function onPointerMove(event) {
+            mouseX = (event.clientX / window.innerWidth) * 2 - 1;
+            mouseY = (event.clientY / window.innerHeight) * 2 - 1; // 修复方向
+        }
+
+        // 触摸移动
+        function onTouchMove(event) {
+            event.preventDefault();
+            if (event.touches.length > 0) {
+                mouseX = (event.touches[0].clientX / window.innerWidth) * 2 - 1;
+                mouseY = (event.touches[0].clientY / window.innerHeight) * 2 - 1;
+            }
+        }
+
+        // 窗口调整
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 渲染循环
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (catModel) {
+                // 计算目标旋转
+                targetRotation.y = mouseX * 0.5;
+                targetRotation.x = -mouseY * 0.3; // 添加负号使猫咪往上看
+
+                // 平滑过渡
+                const smoothFactor = 0.1;
+                currentRotation.x += (targetRotation.x - currentRotation.x) * smoothFactor;
+                currentRotation.y += (targetRotation.y - currentRotation.y) * smoothFactor;
+
+                // 应用旋转
+                catModel.rotation.y = currentRotation.y;
+                catModel.rotation.x = currentRotation.x;
+
+                // 眼睛跟随
+                const leftEye = catModel.getObjectByName('leftEye');
+                const rightEye = catModel.getObjectByName('rightEye');
+                if (leftEye && rightEye) {
+                    const eyeRotation = mouseX * 0.3;
+                    leftEye.rotation.y = eyeRotation;
+                    rightEye.rotation.y = eyeRotation;
+                }
+
+                // 呼吸动画
+                const time = Date.now() * 0.001;
+                catModel.position.y = 0.5 + Math.sin(time * 2) * 0.05;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // 启动应用
+        window.addEventListener('load', init);
+    </script>
+</body>
+
+</html>

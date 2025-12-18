@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>猫咪手势跟踪 - 烟花版</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        #fireworks-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        #scene-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        /* 呼吸灯 DOM 元素 */
+        #charging-effect {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.5) 40%, rgba(255, 255, 255, 0) 70%);
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 30;
+            /* 在烟花之上 */
+            display: none;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.6);
+            transition: opacity 0.1s;
+        }
+
+        #webcam {
+            z-index: 1;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="loading">
+        <div class="spinner"></div>
+        <p id="load-status">正在加载...</p>
+        <p class="hint" id="load-hint">请稍候</p>
+    </div>
+
+    <div id="app">
+        <video id="webcam" autoplay playsinline style="position:absolute;opacity:0;width:1px;height:1px;"></video>
+        <div id="scene-container"></div>
+        <canvas id="fireworks-canvas"></canvas>
+        <div id="charging-effect"></div>
+
+        <div id="status">
+            <div class="status-dot"></div>
+            <span id="status-text">初始化中...</span>
+        </div>
+    </div>
+
+    <!-- Import Map: 现代浏览器标准加载方式 -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <!-- 主逻辑：ES Module -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // 挂载到全局，供后续普通脚本使用
+        window.THREE = THREE;
+        window.GLTFLoader = GLTFLoader;
+        window.RoomEnvironment = RoomEnvironment;
+        window.OrbitControls = OrbitControls;
+        console.log('✅ Three.js, GLTFLoader, RoomEnvironment, OrbitControls 模块已加载');
+
+        // 启动标记
+        window.modulesReady = true;
+    </script>
+
+    <script>
+        // 全局变量
+        let camera, scene, renderer, catModel;
+        let videoElement;
+        let hands, cameraHelper;
+        let handDetected = false;
+        let handScreenX = 0, handScreenY = 0; // 手在屏幕上的像素坐标
+        let handPosition = { x: 0, y: 0 };
+        let targetRotation = { x: 0, y: 0 };
+        let currentRotation = { x: 0, y: 0 };
+        let mouseX = 0, mouseY = 0;
+        let useHandTracking = false;
+        let mediaPipeLoaded = false;
+
+        // 手势状态
+        let isHandOpen = false; // 是否张开手掌
+        let handOpenness = 0; // 手掌张开程度 0-1
+        let detectionStableCount = 0; // 稳定检测计数
+        const STABLE_FRAMES_REQUIRED = 0; // 立即响应，不需要稳定帧
+
+        // 烟花系统
+        let fireworksCanvas, fireworksCtx;
+        let particles = [];
+        let trailParticles = [];
+        const MAX_PARTICLES = 500;
+
+        // GLB模型系统
+        let glbLoader = null;
+        let catModel1 = null; // cat.glb (握拳状态)
+        let catModel2 = null; // cat-2.glb (张开状态)
+        let currentModelState = null; // 'closed' 或 'open'
+        let currentModelName = null; // 当前模型的名称 (文件名)
+        let modelsLoaded = false;
+
+        // 相机控制系统
+        let controls = null;
+        let isCameraEditing = false;
+        let defaultCameraSettings = {
+            'cat.glb': { position: { x: 0, y: 0.3, z: 2.5 }, target: { x: 0, y: 0, z: 0 } },
+            'cat-2.glb': { position: { x: 0, y: 0.3, z: 2.5 }, target: { x: 0, y: 0, z: 0 } }
+        };
+        let cameraSettings = JSON.parse(localStorage.getItem('catcam_camera_settings_v2')) || defaultCameraSettings;
+
+        // 保存相机设置
+        function saveCameraSettings() {
+            if (!currentModelName || !controls) return;
+
+            cameraSettings[currentModelName] = {
+                position: {
+                    x: camera.position.x,
+                    y: camera.position.y,
+                    z: camera.position.z
+                },
+                target: {
+                    x: controls.target.x,
+                    y: controls.target.y,
+                    z: controls.target.z
+                }
+            };
+
+            localStorage.setItem('catcam_camera_settings_v2', JSON.stringify(cameraSettings));
+            console.log(`💾 已保存 [${currentModelName}] 模型视角参数:`, cameraSettings[currentModelName]);
+        }
+
+        // 应用相机设置
+        function applyCameraSettings(modelName) {
+            const settings = cameraSettings[modelName] || defaultCameraSettings[modelName] || defaultCameraSettings['cat.glb'];
+            if (camera && settings) {
+                camera.position.set(settings.position.x, settings.position.y, settings.position.z);
+                if (controls) {
+                    controls.target.set(settings.target.x, settings.target.y, settings.target.z);
+                    controls.update();
+                }
+                console.log(`📸 已应用 [${modelName}] 视角`);
+            }
+        }
+        class FireworkParticle {
+            constructor(x, y, angle, speed, hue) {
+                this.x = x;
+                this.y = y;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.life = 1.0;
+                this.decay = 0.015 + Math.random() * 0.01;
+                this.size = 3 + Math.random() * 3;
+                this.hue = hue;
+                this.saturation = 80 + Math.random() * 20;
+                this.lightness = 50 + Math.random() * 20;
+                this.alpha = 1.0;
+            }
+
+            update() {
+                this.vx *= 0.98; // 摩擦力
+                this.vy *= 0.98;
+                this.vy += 0.1; // 重力
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+                this.alpha = this.life;
+            }
+
+            draw(ctx) {
+                ctx.save();
+
+                // 光晕效果
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size * 3);
+                gradient.addColorStop(0, `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, ${this.alpha * 0.8})`);
+                gradient.addColorStop(0.5, `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, ${this.alpha * 0.3})`);
+                gradient.addColorStop(1, `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, 0)`);
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size * 3, 0, Math.PI * 2);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+
+                // 核心亮点
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = `hsla(${this.hue}, 100%, 80%, ${this.alpha})`;
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        // 拖尾粒子类
+        class TrailParticle {
+            constructor(x, y, hue) {
+                this.x = x;
+                this.y = y;
+                this.life = 1.0;
+                this.decay = 0.05;
+                this.size = 5 + Math.random() * 5;
+                this.hue = hue;
+            }
+
+            update() {
+                this.life -= this.decay;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.size * 2);
+                gradient.addColorStop(0, `hsla(${this.hue}, 100%, 70%, ${this.life * 0.6})`);
+                gradient.addColorStop(1, `hsla(${this.hue}, 100%, 50%, 0)`);
+
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size * 2, 0, Math.PI * 2);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 初始化烟花Canvas
+        function initFireworks() {
+            fireworksCanvas = document.getElementById('fireworks-canvas');
+            fireworksCtx = fireworksCanvas.getContext('2d');
+            fireworksCanvas.width = window.innerWidth;
+            fireworksCanvas.height = window.innerHeight;
+
+            window.addEventListener('resize', () => {
+                fireworksCanvas.width = window.innerWidth;
+                fireworksCanvas.height = window.innerHeight;
+            });
+        }
+
+        // 创建烟花爆发
+        function createFireworkBurst(x, y, hue) {
+            const particleCount = 25 + Math.floor(Math.random() * 15);
+            const angleStep = (Math.PI * 2) / particleCount;
+
+            for (let i = 0; i < particleCount; i++) {
+                const angle = angleStep * i + Math.random() * 0.2;
+                const speed = 2 + Math.random() * 3;
+                particles.push(new FireworkParticle(x, y, angle, speed, hue));
+            }
+        }
+
+        // 更新和绘制烟花
+        function updateFireworks() {
+            // 使用 destination-out 实现透明淡出，而不是叠加黑色
+            fireworksCtx.globalCompositeOperation = 'destination-out';
+            fireworksCtx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            fireworksCtx.fillRect(0, 0, fireworksCanvas.width, fireworksCanvas.height);
+            fireworksCtx.globalCompositeOperation = 'source-over';
+
+            // 如果检测到手势
+            if (handDetected) {
+                if (isHandOpen) {
+                    // 张开手掌 - 绽放彩色烟花
+                    const hue = (Date.now() % 3000) / 3000 * 360;
+
+                    // 持续添加拖尾粒子
+                    trailParticles.push(new TrailParticle(handScreenX, handScreenY, hue));
+
+                    // 增加烟花生成概率（每帧60%概率生成）
+                    if (Math.random() < 0.6) {
+                        createFireworkBurst(handScreenX, handScreenY, hue);
+                    }
+
+                    // 额外增加一些小烟花增强效果
+                    if (Math.random() < 0.3) {
+                        const offsetX = (Math.random() - 0.5) * 20;
+                        const offsetY = (Math.random() - 0.5) * 20;
+                        createFireworkBurst(handScreenX + offsetX, handScreenY + offsetY, hue + Math.random() * 60);
+                    }
+                }
+                // (DOM层已处理捏拳状态的显示)
+            }
+
+            // ... (粒子更新逻辑保持不变)
+
+            // 更新拖尾粒子
+            trailParticles = trailParticles.filter(p => {
+                p.update();
+                if (p.life > 0) {
+                    p.draw(fireworksCtx);
+                    return true;
+                }
+                return false;
+            });
+
+            // 更新烟花粒子
+            particles = particles.filter(p => {
+                p.update();
+                if (p.life > 0) {
+                    p.draw(fireworksCtx);
+                    return true;
+                }
+                return false;
+            });
+
+            // 限制粒子数量
+            while (particles.length > MAX_PARTICLES) {
+                particles.shift();
+            }
+        }
+
+        // ... existing code ...
+
+        // 初始化
+        async function init() {
+            console.log('🚀 初始化应用...');
+
+            // 等待ES模块加载
+            let retries = 0;
+            while (!window.modulesReady && retries < 20) {
+                await new Promise(r => setTimeout(r, 100));
+                retries++;
+            }
+
+            if (typeof THREE === 'undefined') {
+                alert('Three.js模块加载失败，请刷新');
+                return;
+            }
+
+            initFireworks();
+            initThreeJS();
+
+            // ... existing code ...
+
+            updateLoadStatus('正在加载手势识别...', '这可能需要几秒钟');
+
+            try {
+                await loadMediaPipe();
+                await initCamera();
+                await initHandTracking();
+                useHandTracking = true;
+                document.getElementById('status-text').textContent = '伸出手掌看烟花！';
+            } catch (error) {
+                // ... fallback ...
+                console.warn(error);
+                useHandTracking = false;
+                setupTouchMode();
+                document.getElementById('status-text').textContent = '触摸模式';
+            }
+
+            animate();
+
+            setTimeout(() => {
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('app').classList.add('active');
+            }, 500);
+
+            console.log('✅ 应用初始化完成');
+        }
+
+        // ... existing code ...
+
+        // 加载GLB模型
+        async function loadGLBModels() {
+            console.log('🐱 开始加载GLB模型...');
+
+            // 此时 GLTFLoader 应该已经在 window 上了
+            if (!window.GLTFLoader) {
+                console.error('❌ GLTFLoader未加载，使用备用模型');
+                createFallbackModel();
+                return;
+            }
+
+            glbLoader = new window.GLTFLoader();
+
+            try {
+                // 预加载两个模型
+                const [model1, model2] = await Promise.all([
+                    loadSingleGLB('models/cat.glb'),
+                    loadSingleGLB('models/cat-2.glb')
+                ]);
+
+                catModel1 = model1;
+                catModel2 = model2;
+
+                // 默认显示握拳模型
+                catModel = catModel1;
+                scene.add(catModel);
+                currentModelState = 'closed';
+                modelsLoaded = true;
+
+                console.log('✅ 两个GLB模型加载成功');
+            } catch (error) {
+                console.error('❌ GLB模型加载失败:', error);
+                createFallbackModel();
+            }
+        }
+
+        // 更新DOM层呼吸灯位置
+        function updateChargingEffect() {
+            const el = document.getElementById('charging-effect');
+            if (handDetected && !isHandOpen) {
+                el.style.display = 'block';
+                el.style.left = handScreenX + 'px';
+                el.style.top = handScreenY + 'px';
+
+                // 呼吸动画
+                const time = Date.now() * 0.003;
+                const scale = 1 + Math.sin(time * 3) * 0.2; // 快速呼吸
+                el.style.transform = `translate(-50%, -50%) scale(${scale})`;
+                el.style.opacity = Math.sin(time * 3) * 0.2 + 0.8;
+            } else {
+                el.style.display = 'none';
+            }
+        }
+
+        // 更新加载状态
+        function updateLoadStatus(status, hint = '') {
+            document.getElementById('load-status').textContent = status;
+            if (hint) document.getElementById('load-hint').textContent = hint;
+            console.log(status, hint);
+        }
+
+        // 初始化
+        async function init() {
+            console.log('🚀 初始化应用...');
+
+            // 等待ES模块加载
+            let retries = 0;
+            while (!window.modulesReady && retries < 50) {
+                await new Promise(r => setTimeout(r, 100));
+                retries++;
+            }
+
+            if (typeof THREE === 'undefined') {
+                alert('Three.js模块加载失败，请刷新');
+                return;
+            }
+
+            initFireworks();
+            initThreeJS();
+
+            updateLoadStatus('正在加载手势识别...', '这可能需要几秒钟');
+
+            try {
+                await loadMediaPipe();
+                await initCamera();
+                await initHandTracking();
+                useHandTracking = true;
+                document.getElementById('status-text').textContent = '伸出手掌看烟花！';
+            } catch (error) {
+                console.warn('手势跟踪初始化失败，使用触摸模式:', error);
+                useHandTracking = false;
+                setupTouchMode();
+                document.getElementById('status-text').textContent = '触摸屏幕看烟花';
+            }
+
+            animate();
+
+            setTimeout(() => {
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('app').classList.add('active');
+            }, 500);
+
+            console.log('✅ 应用初始化完成');
+        }
+
+        // ... existing code ...
+
+        // 加载GLB模型
+        async function loadGLBModels() {
+            console.log('🐱 开始加载GLB模型...');
+
+            // 此时 GLTFLoader 应该已经在 window 上了
+            if (!window.GLTFLoader) {
+                console.error('❌ GLTFLoader未加载，使用备用模型');
+                // 调试信息
+                console.log('Window keys:', Object.keys(window).filter(k => k.includes('GLTF')));
+                createFallbackModel();
+                return;
+            }
+
+            glbLoader = new window.GLTFLoader();
+
+            try {
+                // 预加载两个模型
+                const [model1, model2] = await Promise.all([
+                    loadSingleGLB('models/cat.glb'),
+                    loadSingleGLB('models/cat-2.glb')
+                ]);
+
+                catModel1 = model1;
+                catModel2 = model2;
+
+                // 默认显示握拳模型
+                catModel = catModel1;
+                scene.add(catModel);
+                currentModelState = 'closed';
+                modelsLoaded = true;
+
+                console.log('✅ 两个GLB模型加载成功');
+            } catch (error) {
+                console.error('❌ GLB模型加载失败:', error);
+                createFallbackModel();
+            }
+        }
+
+        // 加载MediaPipe库
+        function loadMediaPipe() {
+            return new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('MediaPipe加载超时')), 15000);
+
+                const scripts = [
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js',
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js',
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js'
+                ];
+
+                Promise.all(scripts.map(src => {
+                    return new Promise((res, rej) => {
+                        const script = document.createElement('script');
+                        script.src = src;
+                        script.onload = res;
+                        script.onerror = () => rej(new Error(`Failed to load ${src}`));
+                        document.head.appendChild(script);
+                    });
+                }))
+                    .then(() => {
+                        clearTimeout(timeout);
+                        mediaPipeLoaded = true;
+                        console.log('✅ MediaPipe加载成功');
+                        resolve();
+                    })
+                    .catch(err => {
+                        clearTimeout(timeout);
+                        reject(err);
+                    });
+            });
+        }
+
+        // 初始化摄像头
+        async function initCamera() {
+            updateLoadStatus('请求摄像头权限...', '');
+            videoElement = document.getElementById('webcam');
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+                audio: false
+            });
+
+            videoElement.srcObject = stream;
+            await new Promise(resolve => {
+                videoElement.onloadedmetadata = resolve;
+            });
+
+            console.log('✅ 摄像头初始化成功');
+        }
+
+        // 初始化手势跟踪
+        async function initHandTracking() {
+            if (!mediaPipeLoaded || typeof Hands === 'undefined') {
+                throw new Error('MediaPipe未加载');
+            }
+
+            updateLoadStatus('初始化手势识别...', '');
+
+            hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 0,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onHandResults);
+
+            cameraHelper = new Camera(videoElement, {
+                onFrame: async () => await hands.send({ image: videoElement }),
+                width: 640,
+                height: 480
+            });
+            cameraHelper.start();
+
+            console.log('✅ 手势跟踪初始化成功');
+        }
+
+
+        // 计算手指张开程度
+        function calculateHandOpenness(landmarks) {
+            // 计算手指尖和手掌中心的距离
+            const palmCenter = landmarks[9]; // 中指掌骨关节
+            const wrist = landmarks[0]; // 手腕
+
+            // 计算各手指尖到手掌中心的距离
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            const middleTip = landmarks[12];
+            const ringTip = landmarks[16];
+            const pinkyTip = landmarks[20];
+
+            // 计算距离（归一化坐标）
+            const distance = (p1, p2) => {
+                const dx = p1.x - p2.x;
+                const dy = p1.y - p2.y;
+                return Math.sqrt(dx * dx + dy * dy);
+            };
+
+            // 手掌基准距离（手腕到中指根部）
+            const palmLength = distance(wrist, palmCenter);
+
+            // 各手指的伸展距离
+            const thumbDist = distance(thumbTip, palmCenter) / palmLength;
+            const indexDist = distance(indexTip, palmCenter) / palmLength;
+            const middleDist = distance(middleTip, palmCenter) / palmLength;
+            const ringDist = distance(ringTip, palmCenter) / palmLength;
+            const pinkyDist = distance(pinkyTip, palmCenter) / palmLength;
+
+            // 平均距离
+            const avgDist = (thumbDist + indexDist + middleDist + ringDist + pinkyDist) / 5;
+
+            // 详细调试信息
+            console.log(`📏 手指距离 - 拇指:${thumbDist.toFixed(2)} 食指:${indexDist.toFixed(2)} 中指:${middleDist.toFixed(2)} 无名指:${ringDist.toFixed(2)} 小指:${pinkyDist.toFixed(2)} | 平均:${avgDist.toFixed(2)}`);
+
+            // 归一化到0-1范围
+            // 捏拳时约1.2，张开时约2.0-2.5
+            const openness = Math.max(0, Math.min(1, (avgDist - 1.2) / 0.8));
+
+            return openness;
+        }
+
+        // 手势检测结果
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                const palmCenter = landmarks[9];
+
+                // 计算目标位置
+                const targetHandX = (1 - palmCenter.x) * 2 - 1;
+                const targetHandY = palmCenter.y * 2 - 1;
+                const targetScreenX = (1 - palmCenter.x) * window.innerWidth;
+                const targetScreenY = palmCenter.y * window.innerHeight;
+
+                // 平滑插值（让移动丝滑）
+                const posSmooth = 0.35;
+                handPosition.x = handPosition.x * (1 - posSmooth) + targetHandX * posSmooth;
+                handPosition.y = handPosition.y * (1 - posSmooth) + targetHandY * posSmooth;
+                handScreenX = handScreenX * (1 - posSmooth) + targetScreenX * posSmooth;
+                handScreenY = handScreenY * (1 - posSmooth) + targetScreenY * posSmooth;
+
+                // 计算手势张开程度
+                const currentOpenness = calculateHandOpenness(landmarks);
+
+                // 平滑过渡（避免抖动）
+                handOpenness = handOpenness * 0.7 + currentOpenness * 0.3;
+
+                // 判断是否张开（大幅降低阈值到0.15，超高敏感度）
+                const wasOpen = isHandOpen;
+                isHandOpen = handOpenness > 0.15;
+
+                // 稳定性检测（减少到2帧，更快响应）
+                if (isHandOpen === wasOpen) {
+                    detectionStableCount++;
+                } else {
+                    detectionStableCount = 0;
+                }
+
+
+
+                handDetected = true;
+                updateStatus(true, isHandOpen);
+            } else {
+                handDetected = false;
+                isHandOpen = false;
+                handOpenness = 0;
+                detectionStableCount = 0;
+                updateStatus(false, false);
+            }
+        }
+
+        // 设置触摸模式
+        function setupTouchMode() {
+            document.addEventListener('mousemove', onPointerMove);
+            document.addEventListener('touchmove', onTouchMove);
+        }
+
+        function onPointerMove(event) {
+            mouseX = (event.clientX / window.innerWidth) * 2 - 1;
+            mouseY = (event.clientY / window.innerHeight) * 2 - 1;
+            handScreenX = event.clientX;
+            handScreenY = event.clientY;
+            handDetected = true;
+        }
+
+        function onTouchMove(event) {
+            event.preventDefault();
+            if (event.touches.length > 0) {
+                mouseX = (event.touches[0].clientX / window.innerWidth) * 2 - 1;
+                mouseY = (event.touches[0].clientY / window.innerHeight) * 2 - 1;
+                handScreenX = event.touches[0].clientX;
+                handScreenY = event.touches[0].clientY;
+                handDetected = true;
+            }
+        }
+
+        // 更新状态
+        function updateStatus(detected, handOpen = false) {
+            const dot = document.querySelector('.status-dot');
+            const text = document.getElementById('status-text');
+
+            if (useHandTracking) {
+                if (detected) {
+                    dot.classList.add('active');
+                    if (handOpen) {
+                        text.textContent = '✨';
+                    } else {
+                        text.textContent = '⚪';
+                    }
+                } else {
+                    dot.classList.remove('active');
+                    text.textContent = '伸出猫爪试试';
+                }
+            } else {
+                if (detected) {
+                    dot.classList.add('active');
+                    text.textContent = '✨ 烟花绽放中';
+                } else {
+                    dot.classList.remove('active');
+                    text.textContent = '触摸屏幕看烟花';
+                }
+            }
+        }
+
+        // Three.js场景
+        function initThreeJS() {
+            const container = document.getElementById('scene-container');
+            scene = new THREE.Scene();
+            // 背景设为纯黑
+            scene.background = new THREE.Color(0x000000);
+
+            // 🎬 调整相机视角：上半身特写
+            // Z轴拉近到 2.5 (原为 8)，Y轴微调对准面部
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 0.3, 2.5);
+
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // 💡 HDRI 级光照环境 (Studio Lighting)
+            if (window.RoomEnvironment) {
+                const pmremGenerator = new THREE.PMREMGenerator(renderer);
+                pmremGenerator.compileEquirectangularShader();
+                const roomEnvironment = new window.RoomEnvironment();
+                scene.environment = pmremGenerator.fromScene(roomEnvironment).texture;
+            }
+
+            // 辅助补光 (增强轮廓和眼神)
+            // 轮廓光 (Rim Light) - 提供背部边缘高光，蓝紫色调
+            const rimLight = new THREE.SpotLight(0x4455ff, 5.0);
+            rimLight.position.set(-2, 2, -2);
+            rimLight.lookAt(0, 0, 0);
+            scene.add(rimLight);
+
+            // 眼神光 (Eye Light) - 微弱的一点点，点亮眼睛
+            const pointLight = new THREE.PointLight(0xffffff, 0.5);
+            pointLight.position.set(0, 0.5, 2);
+            scene.add(pointLight);
+
+            // 🎮 OrbitControls 控制器 (默认禁用)
+            if (window.OrbitControls) {
+                controls = new window.OrbitControls(camera, renderer.domElement);
+                controls.listenToKeyEvents(window); // 👈 启用键盘控制
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = true; // 👈 屏幕空间平移 (上下左右)
+                controls.enabled = false; // 默认关闭，按C开启
+            }
+
+            // ⌨️ 按下 'C' 键切换相机编辑模式
+            window.addEventListener('keydown', (e) => {
+                const container = document.getElementById('scene-container');
+                if (e.key.toLowerCase() === 'c') {
+                    isCameraEditing = !isCameraEditing;
+                    if (controls) controls.enabled = isCameraEditing;
+
+                    if (isCameraEditing) {
+                        console.log('🔧 相机编辑模式: ON (使用鼠标/方向键调整)');
+                        document.body.style.cursor = 'move';
+                        if (container) container.style.pointerEvents = 'auto'; // 👈 允许交互
+                    } else {
+                        console.log('🔧 相机编辑模式: OFF (参数已保存)');
+                        document.body.style.cursor = 'default';
+                        if (container) container.style.pointerEvents = 'none'; // 👈 恢复穿透
+                        saveCameraSettings();
+                    }
+                }
+            });
+
+            loadGLBModels();
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // 加载GLB模型
+        async function loadGLBModels() {
+            console.log('🐱 开始加载GLB模型...');
+
+            // 此时 GLTFLoader 应该已经在 window 上了
+            if (!window.GLTFLoader) {
+                console.error('❌ GLTFLoader未加载，使用备用模型');
+                createFallbackModel();
+                return;
+            }
+
+            glbLoader = new window.GLTFLoader();
+
+            try {
+                // 预加载两个模型
+                const [model1, model2] = await Promise.all([
+                    loadSingleGLB('models/cat.glb'),
+                    loadSingleGLB('models/cat-2.glb')
+                ]);
+
+                catModel1 = model1;
+                catModel2 = model2;
+
+                // 默认显示握拳模型
+                catModel = catModel1;
+                scene.add(catModel);
+                currentModelState = 'closed';
+                modelsLoaded = true;
+
+                console.log('✅ 两个GLB模型加载成功');
+            } catch (error) {
+                console.error('❌ GLB模型加载失败:', error);
+                createFallbackModel();
+            }
+        }
+
+        // 加载单个GLB文件
+        function loadSingleGLB(path) {
+            return new Promise((resolve, reject) => {
+                glbLoader.load(
+                    path,
+                    (gltf) => {
+                        const model = gltf.scene;
+                        model.scale.set(1.5, 1.5, 1.5);
+                        model.position.set(0, 0, 0);
+                        console.log(`✅ 加载成功: ${path}`);
+                        resolve(model);
+                    },
+                    (xhr) => {
+                        const percent = (xhr.loaded / xhr.total * 100).toFixed(0);
+                        console.log(`📦 ${path}: ${percent}%`);
+                    },
+                    (error) => {
+                        console.error(`❌ 加载失败 ${path}:`, error);
+                        reject(error);
+                    }
+                );
+            });
+        }
+
+        // 切换模型
+        function switchCatModel(newState) {
+            if (!modelsLoaded || currentModelState === newState) return;
+
+            // 移除当前模型
+            if (catModel) {
+                scene.remove(catModel);
+            }
+
+            // 切换到新模型
+            if (newState === 'closed' && catModel1) {
+                catModel = catModel1;
+                currentModelName = 'cat.glb';
+                console.log('🔄 切换到握拳模型 (cat.glb)');
+            } else if (newState === 'open' && catModel2) {
+                catModel = catModel2;
+                currentModelName = 'cat-2.glb';
+                console.log('🔄 切换到张开模型 (cat-2.glb)');
+            }
+
+            scene.add(catModel);
+            currentModelState = newState;
+
+            // 尝试应用相机视角
+            if (currentModelName) {
+                applyCameraSettings(currentModelName);
+            } else {
+                console.warn('⚠️ 未知模型名称，跳过视角应用');
+            }
+        }
+
+        // 创建程序化备用模型
+        function createFallbackModel() {
+            console.log('🐱 使用程序化备用模型...');
+            catModel = new THREE.Group();
+
+            const furMaterial = new THREE.MeshPhongMaterial({ color: 0xff9966, shininess: 30 });
+            const eyeWhiteMaterial = new THREE.MeshPhongMaterial({ color: 0xffffff });
+            const pupilMaterial = new THREE.MeshPhongMaterial({ color: 0x1a1a1a });
+
+            const head = new THREE.Mesh(new THREE.SphereGeometry(1.2, 32, 32), furMaterial);
+            head.scale.set(1, 0.95, 0.9);
+            catModel.add(head);
+
+            const leftEar = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 8), furMaterial);
+            leftEar.position.set(-0.7, 1.0, 0.1);
+            leftEar.rotation.z = -0.3;
+            catModel.add(leftEar);
+
+            const rightEar = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 8), furMaterial);
+            rightEar.position.set(0.7, 1.0, 0.1);
+            rightEar.rotation.z = 0.3;
+            catModel.add(rightEar);
+
+            const leftEyeGroup = new THREE.Group();
+            leftEyeGroup.add(new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), eyeWhiteMaterial));
+            const leftPupil = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), pupilMaterial);
+            leftPupil.position.z = 0.18;
+            leftEyeGroup.add(leftPupil);
+            leftEyeGroup.position.set(-0.5, 0.3, 0.8);
+            leftEyeGroup.name = 'leftEye';
+            catModel.add(leftEyeGroup);
+
+            const rightEyeGroup = new THREE.Group();
+            rightEyeGroup.add(new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), eyeWhiteMaterial));
+            const rightPupil = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 16), pupilMaterial);
+            rightPupil.position.z = 0.18;
+            rightEyeGroup.add(rightPupil);
+            rightEyeGroup.position.set(0.5, 0.3, 0.8);
+            rightEyeGroup.name = 'rightEye';
+            catModel.add(rightEyeGroup);
+
+            const body = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), furMaterial);
+            body.position.set(0, -2, 0);
+            body.scale.set(1.1, 1.3, 0.9);
+            catModel.add(body);
+
+            catModel.position.y = 0.5;
+            scene.add(catModel);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 渲染循环
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // DOM呼吸灯
+            updateChargingEffect();
+
+            // 🎮 更新相机控制器
+            if (controls && isCameraEditing) {
+                controls.update();
+            }
+
+            // 根据手势状态切换模型
+            if (handDetected && modelsLoaded) {
+                const desiredState = isHandOpen ? 'open' : 'closed';
+                switchCatModel(desiredState);
+            }
+
+            if (catModel) {
+                const inputX = useHandTracking && handDetected ? handPosition.x : mouseX;
+                const inputY = useHandTracking && handDetected ? handPosition.y : mouseY;
+
+                // --- 核心修改：模型位置固定，仅眼神跟手 ---
+
+                // 1. 位置固定在画面中心
+                const targetY = -0.5;
+                catModel.position.x = 0;
+                catModel.position.y += (targetY - catModel.position.y) * 0.1;
+                catModel.position.z = 0;
+
+                // 2. 头部微动 (幅度很小)
+                // 修复：移除Y轴输入的负号，解决上下反向问题
+                targetRotation.y = inputX * 0.3;
+                targetRotation.x = inputY * 0.2; // 原为 -inputY * 0.2
+
+                currentRotation.x += (targetRotation.x - currentRotation.x) * 0.1;
+                currentRotation.y += (targetRotation.y - currentRotation.y) * 0.1;
+
+                catModel.rotation.y = currentRotation.y;
+                catModel.rotation.x = currentRotation.x;
+
+                // 3. 眼神跟随 (尝试查找眼球节点)
+                catModel.traverse((child) => {
+                    if (child.isMesh && (child.name.toLowerCase().includes('eye'))) {
+                        child.rotation.y = inputX * 0.5;
+                        child.rotation.x = inputY * 0.3; // 原为 -inputY * 0.3
+                    }
+                });
+
+                // 呼吸动画
+                const time = Date.now() * 0.001;
+                catModel.position.y += Math.sin(time * 1.5) * 0.002;
+            }
+
+            updateFireworks();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+
+</html>
