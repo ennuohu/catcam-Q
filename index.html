@@ -3,82 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>手机端手势识别修复版</title>
+    <title>国内极速版-霓虹手势</title>
     
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- 1. 替换为国内 Eleme CDN 镜像 -->
+    <script src="https://npm.elemecdn.com/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://npm.elemecdn.com/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://npm.elemecdn.com/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://npm.elemecdn.com/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
     <style>
-        body {
-            margin: 0;
-            background-color: #000;
-            overflow: hidden;
-            touch-action: none;
-            font-family: monospace;
-        }
-
-        /* 全屏画布 */
-        canvas {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            transform: scaleX(-1); /* 镜像翻转，像照镜子一样 */
-            z-index: 2;
-        }
-
-        /* 调试用：左上角显示原始摄像头画面 */
-        .input_video {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            width: 120px; /* 小窗口 */
-            height: auto;
-            z-index: 10;
-            border: 2px solid red; /* 红框表示正在运行 */
-            opacity: 0.6;
-            transform: scaleX(-1);
-        }
-
-        /* 屏幕日志打印区 */
-        #logs {
-            position: absolute;
-            bottom: 20px;
-            left: 10px;
-            right: 10px;
-            color: #0f0; /* 绿色文字 */
-            background: rgba(0,0,0,0.7);
-            padding: 10px;
-            pointer-events: none;
-            z-index: 20;
-            font-size: 14px;
-            white-space: pre-wrap;
-            border-radius: 8px;
-        }
+        body { margin: 0; background-color: #000; overflow: hidden; touch-action: none; font-family: sans-serif; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); z-index: 2; }
+        .input_video { position: absolute; top: 10px; left: 10px; width: 80px; height: auto; z-index: 10; border: 1px solid #333; opacity: 0.5; transform: scaleX(-1); }
+        #logs { position: absolute; bottom: 20px; width: 100%; text-align: center; color: #00ff00; font-size: 14px; text-shadow: 1px 1px 2px #000; z-index: 20; pointer-events: none;}
     </style>
 </head>
 <body>
 
-    <!-- 原始视频流 (调试用) -->
     <video class="input_video" playsinline muted autoplay></video>
-    
-    <!-- 绘制层 -->
     <canvas class="output_canvas"></canvas>
-
-    <!-- 日志显示 -->
-    <div id="logs">系统初始化中...</div>
+    <div id="logs">正在通过国内节点加载模型...</div>
 
     <script type="module">
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementsByClassName('output_canvas')[0];
         const ctx = canvasElement.getContext('2d');
         const logBox = document.getElementById('logs');
-
-        // 日志打印函数
-        function log(text) {
-            const time = new Date().toLocaleTimeString();
-            logBox.innerText = `[${time}] ${text}\n` + logBox.innerText.slice(0, 200);
-        }
 
         function resize() {
             const dpr = window.devicePixelRatio || 1;
@@ -89,128 +39,69 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // --- 平滑轮廓算法 (保持不变) ---
-        function getSmoothContour(landmarks, width, height) {
-            const contourPoints = [];
-            const fingers = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
-            const pts = landmarks.map(l => ({x: l.x * width, y: l.y * height}));
-            const handSize = Math.hypot(pts[0].x - pts[9].x, pts[0].y - pts[9].y);
-            const offset = handSize * 0.12; 
-
-            const addPoint = (p1, p2, dist, side) => {
-                const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-                const normal = angle + (side * Math.PI / 2); 
-                return { x: p1.x + Math.cos(normal) * dist, y: p1.y + Math.sin(normal) * dist };
-            };
-
-            contourPoints.push(addPoint(pts[0], pts[5], offset * 1.5, -1));
-
-            for (let i = 0; i < fingers.length; i++) {
-                const indices = fingers[i];
-                for (let j = 0; j < indices.length - 1; j++) contourPoints.push(addPoint(pts[indices[j]], pts[indices[j+1]], offset, 1));
-                
-                const tipIdx = indices[indices.length - 1];
-                const prevIdx = indices[indices.length - 2];
-                const angle = Math.atan2(pts[tipIdx].y - pts[prevIdx].y, pts[tipIdx].x - pts[prevIdx].x);
-                contourPoints.push({ x: pts[tipIdx].x + Math.cos(angle)*(offset*1.2), y: pts[tipIdx].y + Math.sin(angle)*(offset*1.2) });
-
-                for (let j = indices.length - 2; j >= 0; j--) contourPoints.push(addPoint(pts[indices[j]], pts[indices[j+1]], offset, -1));
-                
-                if (i < fingers.length - 1) {
-                    const currRoot = pts[indices[0]];
-                    const nextRoot = pts[fingers[i+1][0]];
-                    contourPoints.push({ x: (currRoot.x + nextRoot.x)/2, y: (currRoot.y + nextRoot.y)/2 });
-                }
-            }
-            contourPoints.push(addPoint(pts[0], pts[17], offset * 1.5, 1));
-            return contourPoints;
-        }
-
-        function drawSmoothPath(ctx, points) {
-            if (points.length < 2) return;
-            ctx.beginPath();
-            ctx.moveTo(points[0].x, points[0].y);
-            for (let i = 1; i < points.length - 1; i++) {
-                const midX = (points[i].x + points[i+1].x) / 2;
-                const midY = (points[i].y + points[i+1].y) / 2;
-                ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
-            }
-            ctx.lineTo(points[points.length-1].x, points[points.length-1].y);
-            ctx.quadraticCurveTo(points[points.length-1].x, points[points.length-1].y, points[0].x, points[0].y);
-            ctx.closePath();
-            
-            ctx.shadowColor = "#FFFFFF";
-            ctx.shadowBlur = 20;
-            ctx.strokeStyle = "#FFFFFF";
-            ctx.lineWidth = 4;
-            ctx.lineJoin = "round";
-            ctx.lineCap = "round";
-            ctx.stroke();
-            
-            ctx.shadowBlur = 0;
-            ctx.lineWidth = 2;
-            ctx.stroke();
-        }
-
         // --- 核心逻辑 ---
-
         function onResults(results) {
-            // 清空画布
-            const dpr = window.devicePixelRatio || 1;
-            ctx.clearRect(0, 0, canvasElement.width / dpr, canvasElement.height / dpr);
-
+            ctx.clearRect(0, 0, canvasElement.width / (window.devicePixelRatio||1), canvasElement.height / (window.devicePixelRatio||1));
+            
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                log("检测到手部! 正在绘制...");
+                logBox.innerText = "系统正常运行中";
                 for (const landmarks of results.multiHandLandmarks) {
-                    const w = canvasElement.width / dpr;
-                    const h = canvasElement.height / dpr;
-                    const rawPoints = getSmoothContour(landmarks, w, h);
-                    drawSmoothPath(ctx, rawPoints);
+                    drawNeonHand(ctx, landmarks);
                 }
             } else {
-                log("画面正常 - 未检测到手 (请举手)");
+                logBox.innerText = "未检测到手 (请在光线充足处测试)";
             }
         }
 
-        log("正在加载 MediaPipe 模型...");
+        // 简化的霓虹绘制函数
+        function drawNeonHand(ctx, landmarks) {
+            const w = canvasElement.width / (window.devicePixelRatio||1);
+            const h = canvasElement.height / (window.devicePixelRatio||1);
+            const pts = landmarks.map(l => ({x: l.x * w, y: l.y * h}));
+            
+            ctx.beginPath();
+            const fingers = [[1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16], [17,18,19,20]];
+            
+            // 简单连线逻辑，确保速度快
+            fingers.forEach(idx => {
+               ctx.moveTo(pts[idx[0]-1].x, pts[idx[0]-1].y); // 连到根部
+               idx.forEach(i => ctx.lineTo(pts[i].x, pts[i].y));
+            });
+            // 手掌
+            ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[5].x, pts[5].y);
+            ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[17].x, pts[17].y);
+            ctx.moveTo(pts[5].x, pts[5].y); ctx.lineTo(pts[9].x, pts[9].y);
+            ctx.moveTo(pts[9].x, pts[9].y); ctx.lineTo(pts[13].x, pts[13].y);
+            ctx.moveTo(pts[13].x, pts[13].y); ctx.lineTo(pts[17].x, pts[17].y);
+            
+            ctx.shadowColor = "#00FF00"; ctx.shadowBlur = 20;
+            ctx.strokeStyle = "#00FF00"; ctx.lineWidth = 3; 
+            ctx.lineJoin = "round"; ctx.lineCap = "round";
+            ctx.stroke();
+            ctx.shadowBlur = 0; ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.stroke();
+        }
 
+        // 2. 关键修改：locateFile 指向国内镜像
         const hands = new Hands({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            // 强制从国内饿了么 CDN 下载模型文件 (.tflite, .wasm)
+            return `https://npm.elemecdn.com/@mediapipe/hands/${file}`;
         }});
 
         hands.setOptions({
             maxNumHands: 2,
-            modelComplexity: 0, // 手机端改为0 (Lite模型)，速度更快
+            modelComplexity: 0, // 0=Lite(最快), 1=Full(普通)。手机建议0
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
         });
 
         hands.onResults(onResults);
 
-        // 使用自定义的 Camera 初始化，不锁定分辨率
         const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            facingMode: "user", // 强制使用前置摄像头
-            width: 640,         // 降低分辨率以兼容更多低端机型
-            height: 480
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            facingMode: "user", width: 640, height: 480
         });
 
-        log("正在请求摄像头权限...");
-
-        camera.start()
-            .then(() => {
-                log("摄像头启动成功！等待画面...");
-                // 强制播放视频，解决部分iOS不自动播放问题
-                videoElement.play();
-            })
-            .catch(err => {
-                console.error(err);
-                log("错误: " + err.message);
-                log("请检查是否在 HTTPS 环境，且已允许权限");
-            });
-
+        camera.start().then(() => logBox.innerText = "摄像头已开启，正在下载模型...").catch(err => logBox.innerText = "错误: " + err);
     </script>
 </body>
 </html>
