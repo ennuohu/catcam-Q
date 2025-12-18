@@ -3,60 +3,108 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>最终修复版</title>
+    <title>手动启动版</title>
     
-    <!-- 这里引用你刚刚上传到 GitHub 的本地 hands.js -->
+    <!-- 加载本地主程序 -->
     <script src="./hands.js" crossorigin="anonymous"></script>
-
-    <!-- 基础工具库 (用国内源，速度快且稳定) -->
-    <script src="https://npm.elemecdn.com/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://npm.elemecdn.com/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    
+    <!-- 仅保留绘图工具，移除 camera_utils 以便手动控制 -->
     <script src="https://npm.elemecdn.com/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
 
     <style>
-        body { margin: 0; background-color: #000; overflow: hidden; touch-action: none; font-family: sans-serif; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); z-index: 2; }
-        .input_video { position: absolute; top: 10px; left: 10px; width: 100px; z-index: 10; border: 1px solid red; opacity: 0.5; transform: scaleX(-1); }
-        #logs { position: absolute; bottom: 20px; width: 100%; text-align: center; color: #00ff00; font-size: 14px; font-weight: bold; z-index: 20; pointer-events: none; text-shadow: 1px 1px 1px #000;}
+        body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); z-index: 1; }
+        
+        /* 隐藏原始视频，但必须存在 */
+        .input_video { position: absolute; opacity: 0; width: 1px; height: 1px; z-index: -1; }
+
+        /* 启动按钮样式 */
+        #start-btn {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 15px 30px; background: #00ff00; color: #000;
+            font-size: 18px; font-weight: bold; border-radius: 50px;
+            border: none; z-index: 100; cursor: pointer;
+            box-shadow: 0 0 20px #00ff00;
+        }
+
+        #logs { 
+            position: absolute; bottom: 20px; width: 100%; text-align: center; 
+            color: #fff; font-size: 14px; z-index: 20; pointer-events: none;
+            background: rgba(0,0,0,0.5); padding: 5px;
+        }
     </style>
 </head>
 <body>
 
-    <video class="input_video" playsinline muted autoplay></video>
+    <button id="start-btn">点击启动摄像头</button>
+    <div id="logs">请点击绿色按钮</div>
+    
+    <video class="input_video" playsinline muted></video>
     <canvas class="output_canvas"></canvas>
-    <div id="logs">准备就绪...</div>
 
     <script type="module">
-        const videoElement = document.getElementsByClassName('input_video')[0];
-        const canvasElement = document.getElementsByClassName('output_canvas')[0];
-        const ctx = canvasElement.getContext('2d');
+        const video = document.getElementsByClassName('input_video')[0];
+        const canvas = document.getElementsByClassName('output_canvas')[0];
+        const ctx = canvas.getContext('2d');
         const logBox = document.getElementById('logs');
+        const btn = document.getElementById('start-btn');
+
+        let hands;
+        let isCameraRunning = false;
+
+        function log(msg) {
+            logBox.innerText = msg;
+            console.log(msg);
+        }
 
         function resize() {
-            const dpr = window.devicePixelRatio || 1;
-            canvasElement.width = window.innerWidth * dpr;
-            canvasElement.height = window.innerHeight * dpr;
-            ctx.scale(dpr, dpr);
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
         }
         window.addEventListener('resize', resize);
         resize();
 
-        function onResults(results) {
-            ctx.clearRect(0, 0, canvasElement.width / (window.devicePixelRatio||1), canvasElement.height / (window.devicePixelRatio||1));
-            
-            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                logBox.innerText = ""; 
-                for (const landmarks of results.multiHandLandmarks) {
-                    drawNeonHand(ctx, landmarks);
-                }
-            } else {
-                logBox.innerText = "未检测到手 (请在亮处)";
+        // 1. 初始化模型
+        function initMediaPipe() {
+            log("正在加载 MediaPipe...");
+            try {
+                hands = new Hands({locateFile: (file) => {
+                    log("请求文件: " + file);
+                    return file; // 直接找当前目录的文件
+                }});
+
+                hands.setOptions({
+                    maxNumHands: 2,
+                    modelComplexity: 0,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                hands.onResults(onResults);
+                log("模型加载完毕，等待启动");
+            } catch (e) {
+                log("初始化失败: " + e);
             }
         }
 
+        // 2. 结果处理与绘制
+        function onResults(results) {
+            ctx.save();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                log("识别中...");
+                for (const landmarks of results.multiHandLandmarks) {
+                    drawNeonHand(ctx, landmarks);
+                }
+            }
+            ctx.restore();
+        }
+
         function drawNeonHand(ctx, landmarks) {
-            const w = canvasElement.width / (window.devicePixelRatio||1);
-            const h = canvasElement.height / (window.devicePixelRatio||1);
+            const w = canvas.width;
+            const h = canvas.height;
             const pts = landmarks.map(l => ({x: l.x * w, y: l.y * h}));
             
             ctx.beginPath();
@@ -70,41 +118,65 @@
                 ctx.moveTo(pts[palm[i]].x, pts[palm[i]].y);
                 ctx.lineTo(pts[palm[i+1]].x, pts[palm[i+1]].y);
             }
-            
-            ctx.shadowColor = "#00FF00"; ctx.shadowBlur = 15;
+            ctx.shadowColor = "#00FF00"; ctx.shadowBlur = 20;
             ctx.strokeStyle = "#00FF00"; ctx.lineWidth = 3; 
             ctx.lineJoin = "round"; ctx.lineCap = "round";
             ctx.stroke();
             ctx.shadowBlur = 0; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.stroke();
         }
 
-        // --- 最终修复：强制指向 GitHub 仓库 ---
-        const hands = new Hands({locateFile: (file) => {
-            // 直接返回文件名，让它去当前目录(GitHub)找
-            // 因为你已经把文件上传了，这里绝对能找到
-            console.log("加载本地文件:", file);
-            return file;
-        }});
+        // 3. 手动处理视频帧循环
+        async function processVideo() {
+            if (!isCameraRunning) return;
+            if (video.readyState >= 2) { // 视频数据已就绪
+                await hands.send({image: video});
+            }
+            requestAnimationFrame(processVideo);
+        }
 
-        hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 0, 
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
+        // 4. 点击按钮启动 (最关键的一步)
+        btn.addEventListener('click', async () => {
+            btn.style.display = 'none'; // 隐藏按钮
+            log("正在请求摄像头权限...");
+
+            try {
+                // 原生调用摄像头
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        facingMode: 'user', // 前置摄像头
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+
+                video.srcObject = stream;
+                // 必须手动播放
+                video.play();
+                
+                log("摄像头已开启，模型预热中...");
+                isCameraRunning = true;
+                
+                // 开始循环检测
+                processVideo();
+
+            } catch (err) {
+                console.error(err);
+                btn.style.display = 'block';
+                btn.innerText = "重试";
+                if (err.name === 'NotAllowedError') {
+                    log("错误：权限被拒绝，请重置浏览器权限");
+                } else if (err.name === 'NotFoundError') {
+                    log("错误：找不到前置摄像头");
+                } else {
+                    log("未知错误: " + err.message);
+                }
+            }
         });
 
-        hands.onResults(onResults);
+        // 页面加载后立即初始化库
+        initMediaPipe();
 
-        const camera = new Camera(videoElement, {
-            onFrame: async () => { await hands.send({image: videoElement}); },
-            facingMode: "user", width: 640, height: 480
-        });
-
-        logBox.innerText = "正在从 GitHub 加载模型...";
-        
-        camera.start()
-            .then(() => logBox.innerText = "摄像头开启，请稍候...")
-            .catch(err => logBox.innerText = "错误: " + err);
     </script>
 </body>
 </html>
