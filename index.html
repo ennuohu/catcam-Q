@@ -3,26 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>国内极速版-霓虹手势</title>
+    <title>最终修复版</title>
     
-    <!-- 1. 替换为国内 Eleme CDN 镜像 -->
+    <!-- 这里引用你刚刚上传到 GitHub 的本地 hands.js -->
+    <script src="./hands.js" crossorigin="anonymous"></script>
+
+    <!-- 基础工具库 (用国内源，速度快且稳定) -->
     <script src="https://npm.elemecdn.com/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://npm.elemecdn.com/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://npm.elemecdn.com/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://npm.elemecdn.com/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
     <style>
         body { margin: 0; background-color: #000; overflow: hidden; touch-action: none; font-family: sans-serif; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); z-index: 2; }
-        .input_video { position: absolute; top: 10px; left: 10px; width: 80px; height: auto; z-index: 10; border: 1px solid #333; opacity: 0.5; transform: scaleX(-1); }
-        #logs { position: absolute; bottom: 20px; width: 100%; text-align: center; color: #00ff00; font-size: 14px; text-shadow: 1px 1px 2px #000; z-index: 20; pointer-events: none;}
+        .input_video { position: absolute; top: 10px; left: 10px; width: 100px; z-index: 10; border: 1px solid red; opacity: 0.5; transform: scaleX(-1); }
+        #logs { position: absolute; bottom: 20px; width: 100%; text-align: center; color: #00ff00; font-size: 14px; font-weight: bold; z-index: 20; pointer-events: none; text-shadow: 1px 1px 1px #000;}
     </style>
 </head>
 <body>
 
     <video class="input_video" playsinline muted autoplay></video>
     <canvas class="output_canvas"></canvas>
-    <div id="logs">正在通过国内节点加载模型...</div>
+    <div id="logs">准备就绪...</div>
 
     <script type="module">
         const videoElement = document.getElementsByClassName('input_video')[0];
@@ -39,21 +41,19 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // --- 核心逻辑 ---
         function onResults(results) {
             ctx.clearRect(0, 0, canvasElement.width / (window.devicePixelRatio||1), canvasElement.height / (window.devicePixelRatio||1));
             
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                logBox.innerText = "系统正常运行中";
+                logBox.innerText = ""; 
                 for (const landmarks of results.multiHandLandmarks) {
                     drawNeonHand(ctx, landmarks);
                 }
             } else {
-                logBox.innerText = "未检测到手 (请在光线充足处测试)";
+                logBox.innerText = "未检测到手 (请在亮处)";
             }
         }
 
-        // 简化的霓虹绘制函数
         function drawNeonHand(ctx, landmarks) {
             const w = canvasElement.width / (window.devicePixelRatio||1);
             const h = canvasElement.height / (window.devicePixelRatio||1);
@@ -61,35 +61,34 @@
             
             ctx.beginPath();
             const fingers = [[1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16], [17,18,19,20]];
-            
-            // 简单连线逻辑，确保速度快
             fingers.forEach(idx => {
-               ctx.moveTo(pts[idx[0]-1].x, pts[idx[0]-1].y); // 连到根部
+               ctx.moveTo(pts[idx[0]-1].x, pts[idx[0]-1].y);
                idx.forEach(i => ctx.lineTo(pts[i].x, pts[i].y));
             });
-            // 手掌
-            ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[5].x, pts[5].y);
-            ctx.moveTo(pts[0].x, pts[0].y); ctx.lineTo(pts[17].x, pts[17].y);
-            ctx.moveTo(pts[5].x, pts[5].y); ctx.lineTo(pts[9].x, pts[9].y);
-            ctx.moveTo(pts[9].x, pts[9].y); ctx.lineTo(pts[13].x, pts[13].y);
-            ctx.moveTo(pts[13].x, pts[13].y); ctx.lineTo(pts[17].x, pts[17].y);
+            const palm = [0, 5, 9, 13, 17, 0];
+            for (let i = 0; i < palm.length - 1; i++) {
+                ctx.moveTo(pts[palm[i]].x, pts[palm[i]].y);
+                ctx.lineTo(pts[palm[i+1]].x, pts[palm[i+1]].y);
+            }
             
-            ctx.shadowColor = "#00FF00"; ctx.shadowBlur = 20;
+            ctx.shadowColor = "#00FF00"; ctx.shadowBlur = 15;
             ctx.strokeStyle = "#00FF00"; ctx.lineWidth = 3; 
             ctx.lineJoin = "round"; ctx.lineCap = "round";
             ctx.stroke();
-            ctx.shadowBlur = 0; ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.stroke();
+            ctx.shadowBlur = 0; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.stroke();
         }
 
-        // 2. 关键修改：locateFile 指向国内镜像
+        // --- 最终修复：强制指向 GitHub 仓库 ---
         const hands = new Hands({locateFile: (file) => {
-            // 强制从国内饿了么 CDN 下载模型文件 (.tflite, .wasm)
-            return `https://npm.elemecdn.com/@mediapipe/hands/${file}`;
+            // 直接返回文件名，让它去当前目录(GitHub)找
+            // 因为你已经把文件上传了，这里绝对能找到
+            console.log("加载本地文件:", file);
+            return file;
         }});
 
         hands.setOptions({
             maxNumHands: 2,
-            modelComplexity: 0, // 0=Lite(最快), 1=Full(普通)。手机建议0
+            modelComplexity: 0, 
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
         });
@@ -101,7 +100,11 @@
             facingMode: "user", width: 640, height: 480
         });
 
-        camera.start().then(() => logBox.innerText = "摄像头已开启，正在下载模型...").catch(err => logBox.innerText = "错误: " + err);
+        logBox.innerText = "正在从 GitHub 加载模型...";
+        
+        camera.start()
+            .then(() => logBox.innerText = "摄像头开启，请稍候...")
+            .catch(err => logBox.innerText = "错误: " + err);
     </script>
 </body>
 </html>
